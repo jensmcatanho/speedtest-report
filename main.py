@@ -1,11 +1,13 @@
 from datetime import datetime
 import dropbox
 from dropbox.exceptions import ApiError, AuthError
+import os
+import pandas
 import speedtest
 import sys
 
 TOKEN=""
-FILENAME = "report.txt"
+FILENAME = "report.xlsx"
 
 def file_exists_remotelly(dbx, filename) -> bool:
     path = "/{}".format(filename)
@@ -36,6 +38,25 @@ def upload_file(dbx, filename):
         sys.exit("Error: {}".format(e))
 
 
+def write_results_to_xlsx(results):
+    sheet_name = datetime.now().strftime("%Y-%m")
+
+    if os.path.isfile(FILENAME):
+        data_frame = pandas.read_excel(FILENAME, sheet_name=sheet_name)
+        data_frame.loc[len(data_frame)] = [results.timestamp, bits_per_second_to_megabits_per_second(results.download), bits_per_second_to_megabits_per_second(results.upload)]
+    else:
+        data = {"Timestamp": [results.timestamp],
+                "Download (Mbps)": [bits_per_second_to_megabits_per_second(results.download)],
+                "Upload (Mbps)": [bits_per_second_to_megabits_per_second(results.upload)]}
+        data_frame = pandas.DataFrame(data, columns=["Timestamp", "Download (Mbps)", "Upload (Mbps)"])
+
+    with pandas.ExcelWriter(FILENAME) as writer:
+        data_frame.to_excel(writer, sheet_name=sheet_name, index=False, float_format="%.2f")
+
+
+def bits_per_second_to_megabits_per_second(bits_per_second):
+    return bits_per_second * 0.000001
+
 if __name__ == '__main__':
     if len(TOKEN) == 0:
         sys.exit("Error: Empty Dropbox access token.")
@@ -49,17 +70,9 @@ if __name__ == '__main__':
         st = speedtest.Speedtest()
         st.download(threads=None)
         st.upload(threads=None)
-        results = st.results
-        result_to_sync = "{}\nDownload: {} Mbps\nUpload: {} Mbps\n\n".format(results.timestamp, results.download*(10**-6), results.upload*(10**-6))
 
         if file_exists_remotelly(dbx, FILENAME):
             download_file(dbx, FILENAME)
-            
-            with open("{}".format(FILENAME), "a") as f:
-                f.write(result_to_sync)
 
-        else:
-            with open("{}".format(FILENAME), "w") as f:
-                f.write(result_to_sync)
-
+        write_results_to_xlsx(st.results)
         upload_file(dbx, FILENAME)
