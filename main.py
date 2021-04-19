@@ -3,6 +3,7 @@ import dropbox
 from dropbox.exceptions import ApiError, AuthError
 import os
 import pandas
+import pytz
 import speedtest
 import sys
 
@@ -39,13 +40,15 @@ def upload_file(dbx, filename):
 
 
 def write_results_to_xlsx(results):
-    sheet_name = datetime.now().strftime("%Y-%m")
+    now = current_time()
+    timestamp = now.strftime("%d-%m-%Y %H:%M:%S")
+    sheet_name = now.strftime("%Y-%m")
 
     if os.path.isfile(FILENAME):
         data_frame = pandas.read_excel(FILENAME, sheet_name=sheet_name)
-        data_frame.loc[len(data_frame)] = [results.timestamp, bits_per_second_to_megabits_per_second(results.download), bits_per_second_to_megabits_per_second(results.upload)]
+        data_frame.loc[len(data_frame)] = [timestamp, bits_per_second_to_megabits_per_second(results.download), bits_per_second_to_megabits_per_second(results.upload)]
     else:
-        data = {"Timestamp": [results.timestamp],
+        data = {"Timestamp": [timestamp],
                 "Download (Mbps)": [bits_per_second_to_megabits_per_second(results.download)],
                 "Upload (Mbps)": [bits_per_second_to_megabits_per_second(results.upload)]}
         data_frame = pandas.DataFrame(data, columns=["Timestamp", "Download (Mbps)", "Upload (Mbps)"])
@@ -56,6 +59,12 @@ def write_results_to_xlsx(results):
 
 def bits_per_second_to_megabits_per_second(bits_per_second):
     return bits_per_second * 0.000001
+
+
+def current_time():
+    tz = pytz.timezone('Brazil/East')
+    return datetime.now(tz)
+
 
 if __name__ == '__main__':
     if len(TOKEN) == 0:
