@@ -1,3 +1,4 @@
+import argparse
 from datetime import datetime
 import dropbox
 from dropbox.exceptions import ApiError, AuthError
@@ -8,12 +9,9 @@ import pytz
 import speedtest
 import sys
 
-TOKEN=""
-FILENAME = "report.xlsx"
 
-def file_exists_remotelly(dbx: dropbox.Dropbox, filename: str) -> bool:
+def file_exists_remotelly(dbx: dropbox.Dropbox, remote_report_file_path: str) -> bool:
     try:
-        remote_report_file_path = f"/{filename}"
         dbx.files_get_metadata(remote_report_file_path)
         return True
 
@@ -21,11 +19,8 @@ def file_exists_remotelly(dbx: dropbox.Dropbox, filename: str) -> bool:
         return False
 
 
-def download_file(dbx: dropbox.Dropbox, filename: str):
+def download_file(dbx: dropbox.Dropbox, local_report_file_path: Path, remote_report_file_path: str):
     try:
-        local_report_file_path = Path(filename)
-        remote_report_file_path = f"/{filename}"
-
         metadata, response = dbx.files_download(remote_report_file_path)
         with local_report_file_path.open(mode='wb') as report_file:
             report_file.write(response.content)
@@ -34,11 +29,8 @@ def download_file(dbx: dropbox.Dropbox, filename: str):
         sys.exit(f"Error: {e}")
 
 
-def upload_file(dbx: dropbox.Dropbox, filename: str):
+def upload_file(dbx: dropbox.Dropbox, local_report_file_path: Path, remote_report_file_path: str):
     try:
-        local_report_file_path = Path(filename)
-        remote_report_file_path = f"/{filename}"
-
         with local_report_file_path.open(mode='rb') as report_file:
             upload_result = dbx.files_upload(report_file.read(), remote_report_file_path, mode=dropbox.files.WriteMode.overwrite)
 
@@ -46,13 +38,13 @@ def upload_file(dbx: dropbox.Dropbox, filename: str):
         sys.exit(f"Error: {e}")
 
 
-def write_results_to_xlsx(results: speedtest.SpeedtestResults):
+def write_results_to_xlsx(results: speedtest.SpeedtestResults, local_report_file_path: Path):
     now = current_time()
     timestamp = now.strftime("%d-%m-%Y %H:%M:%S")
     sheet_name = now.strftime("%Y-%m")
 
-    if os.path.isfile(FILENAME):
-        data_frame = pandas.read_excel(FILENAME, sheet_name=sheet_name)
+    if local_report_file_path.exists():
+        data_frame = pandas.read_excel(local_report_file_path, sheet_name=sheet_name)
         data_frame.loc[len(data_frame)] = [timestamp, bits_per_second_to_megabits_per_second(results.download), bits_per_second_to_megabits_per_second(results.upload)]
     else:
         data = {"Timestamp": [timestamp],
@@ -60,7 +52,7 @@ def write_results_to_xlsx(results: speedtest.SpeedtestResults):
                 "Upload (Mbps)": [bits_per_second_to_megabits_per_second(results.upload)]}
         data_frame = pandas.DataFrame(data, columns=["Timestamp", "Download (Mbps)", "Upload (Mbps)"])
 
-    with pandas.ExcelWriter(FILENAME) as writer:
+    with pandas.ExcelWriter(local_report_file_path) as writer:
         data_frame.to_excel(writer, sheet_name=sheet_name, index=False, float_format="%.2f")
 
 
@@ -73,22 +65,38 @@ def current_time() -> datetime:
     return datetime.now(tz)
 
 
-if __name__ == '__main__':
-    if len(TOKEN) == 0:
-        sys.exit("Error: Empty Dropbox access token.")
+def parse_arguments() -> (Path, str, str, float, bool):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--local-path', type=str, required=True)
+    parser.add_argument('--remote-path', type=str, required=True)
+    parser.add_argument('--access-token', type=str, required=True)
+    parser.add_argument('--timeout', default=10, type=float, required=False)
+    parser.add_argument('--secure', default=False, type=bool, required=False)
+    args = parser.parse_args()
 
-    with dropbox.Dropbox(TOKEN) as dbx:
+    return Path(args.local_path), args.remote_path, args.access_token, args.timeout, args.secure
+
+
+def speed_test(timeout, secure):
+    st = speedtest.Speedtest(timeout=timeout, secure=secure)
+    st.download(threads=None)
+    st.upload(threads=None)
+
+    return st.results
+
+if __name__ == '__main__':
+    local_path, remote_path, access_token, timeout, secure = parse_arguments()
+
+    with dropbox.Dropbox(access_token) as dbx:
         try:
             dbx.users_get_current_account()
         except AuthError:
             sys.exit("Error: Invalid access token.")
 
-        st = speedtest.Speedtest()
-        st.download(threads=None)
-        st.upload(threads=None)
+        if file_exists_remotelly(dbx, remote_path):
+            download_file(dbx, local_path, remote_path)
 
-        if file_exists_remotelly(dbx, FILENAME):
-            download_file(dbx, FILENAME)
+        results = speed_test(timeout, secure)
 
-        write_results_to_xlsx(st.results)
-        upload_file(dbx, FILENAME)
+        write_results_to_xlsx(results, local_path)
+        upload_file(dbx, local_path, remote_path)
